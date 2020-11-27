@@ -14,7 +14,7 @@ No further installation is required, all the dependencies needed to perform the 
 ### Running the pipeline
 PipeIT can be executed by simply running this command: 
 ```
-singularity run PipeIT.img -t path/to/tumor.bam -n path/to/normal.bam -e path/to/region.bed 
+singularity run PipeIT_<version>.img -t path/to/tumor.bam -n path/to/normal.bam -e path/to/region.bed 
 ```
 The mandatory input files are the tumor and the normal BAM files, and the BED file of the targeted regions. The BAM files can be obtained directly from the Torrent Server. 
 A number of optional parameters have been added in order to give more freedom to the user.
@@ -26,11 +26,11 @@ It is possible to:
 * Use different values for variant calling and filtering.
 
 
-Alternatively, PipeIT can be executed for a tumor only analysis. Please keep in mind that a tumor-normal analysis will return more accurate results. The standard tumor only analysis can be executed with this command:
+Alternatively, PipeIT can be executed for a tumor-only analysis (alpha status, under active development). Please keep in mind that a tumor-normal analysis will usually provide more accurate results. The standard tumor-only analysis can be executed with this command:
 ```
-singularity run PipeIT.img -k path/to/tumor.bam -e path/to/region.bed -c path/to/annovar/humandb/folder 
+singularity run PipeIT.img -k path/to/tumor.bam -e path/to/region.bed -c path/to/annovar/humandb/folder -d path/to/PoN/file.vcf
 ```
-The mandatory input files are the tumor BAM, the BED file of the targeted regions and the folder with Annovar's database files.
+The mandatory input files are the tumor BAM, the BED file of the targeted regions, the VCF file for the mutations found in a pool of normal samples and the folder with the Annovar database files.
 Please note that you need to download manually Annovar's database files, either directly with Annovar or using PipeIT.
 In the latter case the commands are:
 ```
@@ -38,14 +38,18 @@ singularity exec PipeIT.img annotate_variation.pl -downdb -webfrom annovar -buil
 singularity exec PipeIT.img annotate_variation.pl -downdb -webfrom annovar -buildver hg19 1000g2015aug humandb/
 singularity exec PipeIT.img annotate_variation.pl -downdb -webfrom annovar -buildver hg19 exac03 humandb/
 ```
+Moreover, some of the annotation steps need the dbSNP VCF file, which can be downloaded with:
+```
+wget ftp://gsapubftp-anonymous@ftp.broadinstitute.org/bundle/hg19/dbsnp_138.hg19.vcf.gz
+```
 
-For more information on both the analyses please run:
+For more information on both analyses please run:
 ```
 singularity run PipeIT.img --help
 ```
 
 While specifying input files please note that due to Singularity's nature:
-- Paths to input files have to be *Relative*
+- Paths to input files have to be *relative*
 > ... relative paths will resolve outside the container, and fully qualified paths will resolve inside the container.
 
 Please read [Singularity's FAQ page](http://singularity.lbl.gov/archive/docs/v2-2/faq) for more information about this.
@@ -55,13 +59,13 @@ Please read [Singularity's FAQ page](http://singularity.lbl.gov/archive/docs/v2-
 Input files should be inside these folders to make them accessible to Singularity, otherwise PipeIT cannot find them.
 User can also manually mount additional files and folders using the -B flag, in which case the folders and files within these folders are accesile to Singularity. For example:
 ```
-singularity run -B /myHPC/home/username/files/ PipeIT.img -t RELATIVEpath/to/tumor.bam -n RELATIVEpath/to/normal.bam -e RELATIVEpath/to/region.bed
+singularity run -B /myHPC/home/username/files/PipeIT_<version>.img -t RELATIVEpath/to/tumor.bam -n RELATIVEpath/to/normal.bam -e RELATIVEpath/to/region.bed
 ```
 
 For a comprehensive description on which folders are automatically mounted within the container and on how to mount additional folders, users should read [Singularity's official documentation](http://singularity.lbl.gov/docs-mount).
 
 ### Output files
-PipeIT will locally create a folder that will include both the final output (a VCF file), and the intermediate files . The latter will be automatically deleted by PipeIT at the end of its execution, unless differently indicated.
+PipeIT will create a folder that will include both the final output (a VCF file) and the intermediate files. The latter will be automatically deleted by PipeIT at the end of its execution, unless otherwise indicated.
 
 Please note that an empty final VCF file means that PipeIT have found no mutation in the input sample.
 
@@ -73,29 +77,32 @@ Please note that an empty final VCF file means that PipeIT have found no mutatio
 - Step 3 (Variant filtration): Variants outside of the target regions are removed. Hotspot variants are whitelisted. Variants covered by fewer than 10 reads in either the tumor or the matched normal sample or supported by fewer than 8 reads are removed. Furthermore, variants not likely to be somatic based on the ratio of VAF between tumor and normal (default to minimum 10:1) are also removed. Given the clinical significance of many hotspot mutations, we conservatively whitelist hotspot mutations even if they do not pass all read count and/or VAF filters. We recommend reviewing the whitelisted hotspot variants that did not pass the above read count and/or VAF filters. 
 - Step 4 (Variant annotation): SnpEff annotation using canonical transcripts.
 
-
-
-
-### Tumor only Workflow
-<img src="https://github.com/ckynlab/PipeIT/blob/master/images/TOdiagram.png" align="left" width="275" >
+### Tumor only Workflow (alpha status, under active development)
+<img src="https://github.com/ckynlab/PipeIT/blob/master/images/PIPEIT2_to.png" align="left" width="275" >
 
 - Step 1 (Variant calling): Variant calling using the Torrent Variant Caller is performed.
 - Step 2 (Post-processing multiallelic variants): Multiallelic variants are split, left aligned, trimmed and merged once again with the biallelic variants using BCFtools and GATK.
 - Step 3 (Annotations): Annovar is used to annotate on 3 different databases (1000 Genomes Project, Exome Aggregation Consortium (ExAC) and NHLBI-ESP project) the variants found by TVC. Furthermore, GATK is used to see if the variants found are in homopolymer regions.
-- Step 4 (Variant filtration): Variants outside of the target regions are removed.  Variants covered by fewer than 10 reads in either the tumor or the matched normal sample or supported by fewer than 8 reads are removed. Previous annotations are used to remove any variant found in more than the 5% of the whole cohorts in at least one of the three databases or in a homopolymer region longer than 4. Furthermore, variants not likely to be somatic based on the ratio of VAF between tumor and normal (default to minimum 10:1) are also removed. If this ratio is higher than 0.9 or lower than 0.6 the population databases are used again to remove any variant found, no matter how often. 
-- Step 5 (Pool of normal filtering): A list of variants found in a pool of normal samples unmatched with the original tumor samples are used to remove possible germline mutations. Hotspot variants are whitelisted. Given the clinical significance of many hotspot mutations, we conservatively whitelist hotspot mutations even if they do not pass any of these filters. We recommend reviewing the whitelisted hotspot variants that did not pass the above read count and/or VAF filters. 
+- Step 4 (Variant filtration): Variants outside of the target regions are removed.  Variants covered by fewer than 10 reads in either the tumor or the matched normal sample or supported by fewer than 8 reads are removed. Previous annotations are used to remove any variant found in more than the 5% of the whole cohorts in at least one of the three databases or in a homopolymer region longer than 4. Furthermore, variants not likely to be somatic based on the ratio of VAF between tumor and normal (default to minimum 10:1) are also removed. If this ratio is higher than 0.9 or lower than 0.6 the population databases are used again to remove any variant found, no matter how often. Hotspot variants are whitelisted. Given the clinical significance of many hotspot mutations, we conservatively whitelist hotspot mutations even if they do not pass any of these filters. We recommend reviewing the whitelisted hotspot variants that did not pass the above read count and/or VAF filters. 
+- Step 5 (Pool of normal filtering): A list of variants found in a panel of unmatched normal samples are used to remove possible germline mutations and sequencing artifacts. If a panel of normal file is not provided this step is not performed.
+
+## Citation
+If you use PipeIT, please cite Garofoli et al, *PipeIT: A Singularity Container for Molecular Diagnostic Somatic Variant Calling on the Ion Torrent Next-Generation Sequencing Platform* [DOI: 10.1016/j.jmoldx.2019.05.001](https://doi.org/10.1016/j.jmoldx.2019.05.001). 
 
 
+### Version history
 
-### Versions
-
-* 1.1.0  First release
-* 1.1.1-3 Bug fixes
-* 1.2.1 Added the option for an anlysis without a paired normal bam file
-* 1.2.2-3 Bug fixes
-* 1.2.4 Added Exome Aggregation Consortium (ExAC) in the annotation and filtering in the tumor only analysis
-
-***
+* **1.1.0**     First release
+* **1.1.1-3**   Bug fixes
+* **1.2.1**     Added the option for an analysis without a paired normal bam file
+* **1.2.2-3**   Bug fixes
+* **1.2.4**     Added Exome Aggregation Consortium (ExAC) in the annotation and filtering in the tumor only analysis
+* **1.2.5-6**   Bug fixes
+* **1.2.7**     Bug fixes
+* **1.2.8**     Removed the need for the dbSNP annotation. Bug fixes
+* **1.2.9-10**  Bug fixes. Added the Genome Aggregation Database (gnomAD) in the annotation and filtering in the tumor only analysis
+* **1.2.11**    Command arguments' letters changed, now -t (--tumor) is used for both the analyses. PipeIT will pick one of the two pipelines base on the presence of the -n (--normal) germline control or -c (--humandb) Annovar databaes' files. The -r (--homopolymer_run) argument for the homopolymer filter value for the tumor-only pipeline was added, making this filter not mandatory anymore. Added more arguments for the tumor-only pipeline.
+* **1.2.12-15** Bug fixes. Panel of normals filter is not mandatory anymore. If the -d (--pon) argument is not provided this step is not performed.
 
 ## Docker version
 
