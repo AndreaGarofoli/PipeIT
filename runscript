@@ -1,0 +1,790 @@
+#!/bin/sh
+
+FS=' ' read -r -a array <<< "$@"
+
+
+#######
+### List of variants
+######
+
+OUT="sample"
+UBD="no"
+REF="/PipeIT_resources/usr/local/res/hg19.fasta"
+DIC="/PipeIT_resources/usr/local/res/hg19.dict"
+ANNO="true"
+TBP=""
+NBP=""
+MSR="None"
+MNR="None"
+MTR="None"
+MTVR="None"
+JSON="/PipeIT_resources/usr/local/res/TVC_somatic_parameters.json"
+VERS="1.2.17"
+OUT=""
+LOG="false"
+NTH=4
+HDB='None'
+PON="None"
+POP='None'
+NON="false"
+
+
+#######
+### Help
+######
+
+die() {
+    printf '%s\n' "$1" >&2
+    exit 1
+}
+
+show_help() {
+    printf "PipeIT's parameters: \n"
+    printf " -h, --help:  Print the help. \n"
+    printf "\n"
+    printf "#############. Parameters for the Tumor-Normal analysis \n"    
+    printf " -t, --tumor <path>:  Path to the tumor bam file. \n"
+    printf " -n, --normal <path>:  Path to the normal bam file. \n"
+    printf " -e, --bed <path>:  Path to the bed file. \n"
+    printf " -u, --unmerged <path>:  Path to the unmerged bed file. If not provided PipeIT will create one. [optional] \n"
+    printf " -o, --output <name>:  user submitted name for the output file. The output file will be PipeIT/results/<name>.vcf. If not specified, PipeIT will use the name of the tumor sample [optional]  \n"
+    printf " -p, --threads:  Number of parallel threads used by TVC. [optional, default: 4] \n"
+    printf " -s, --min_supporting_reads: Minimal number of reads supporting the variant,  used for filtering. [optional, default: 8] \n"
+    printf " -r, --min_normal_depth: Minimum read depth for the normal sample, used for filtering. [optional, default: 10] \n"
+    printf " -m, --min_tumor_depth: Minimum read depth for the tumor sample, used for filtering. [optional, default: 10] \n"
+    printf " -f, --min_TN_VAF_ratio: Minimum VAF ratio between tumor and normal samples, used for filtering. [optional, default: 10.0] \n"
+    printf " -j, --TVC_json <path>: Path to the JSON file that includes the parameters for TVC. If not provided PipeIT will use the internal version. [optional] \n"
+    printf " -v, --version: Print version information. \n"
+    printf " -a, --skip_annotation:  Do not perform SnpEff annotation on the called variants. [optional, only accepts "true" and "false", default: false] \n"   
+    printf " -i, --intermediate_files: Keep all the intermediate files in the folder PipeIT/sample/ and PipeIT/vcf/ [optional, "true" and "false", default: false]  \n"
+    printf "\n"
+    printf "#############. Parameters for the TumorOnly analysis\n"     
+    printf " -t, --tumor_only <path>:  Path to the tumor bam file. \n"
+    printf " -u, --unmerged <path>:  Path to the unmerged bed file. If not provided PipeIT will create one. [optional] \n"
+    printf " -j, --TVC_json <path>: Path to the JSON file that includes the parameters for TVC. If not provided PipeIT will use the internal version. [optional] \n"  
+    printf " -e, --bed <path>:  Path to the bed file. \n"  
+    printf " -c, --humandb <path>:  Path to the annovar humandb folder. \n"      
+    printf " -i, --intermediate_files: Keep all the intermediate files in the folder PipeIT/sample/ and PipeIT/vcf/ [optional, "true" and "false", default: false]  \n"
+    printf " -d, --pon <path>: Path to the Pool of Normals' vcf. Must be provided by the user. [optional, suggested] \n"
+    printf " -s, --min_supporting_reads: Minimal number of reads supporting the variant,  used for filtering. [optional, default: 6] \n"
+    printf " -m, --min_tumor_depth: Minimum read depth for the tumor sample, used for filtering. [optional, default: 20] \n"
+    printf " -f, --min_allele_fraction: Minimum Allele Fraction between Reference and Alternative alleles. [optional, default: 0.1] \n"
+    printf " -r, --homopolymer_run: Maximum homopolymer region lenght accepted, used for filtering. The value 0 will disable this filter. [optional, default: 4] \n"
+    printf " -k, --max_pop_af: Maximum accepted frequence of mutation in public databases. [optional, default: 0.005] \n"
+    printf " -y, --non_coding:  Keep non coding mutations. [optional, only accepts "true" and "false", default: false] \n"   
+}
+
+show_version() {
+    printf 'Version: %s\n'  "$VERS"
+}
+
+
+#######
+### Arguments parser
+######
+
+while :; do
+    case $1 in
+        -h|-\?|--help)
+            show_help    # Display a usage synopsis.
+            exit
+            ;;
+        -v|--version)
+            show_version    # Display the version.
+            exit
+            ;;
+        -e|--bed)       # Bed file
+            if [ "$2" ]; then
+                BED=$2
+                shift
+                if [ ! -f "$BED" ]; then
+                   die  'ERROR: --bed File not found.'
+                fi
+            else
+                die 'ERROR: "--bed" requires a non-empty option argument.'
+            fi
+            ;;
+        -u|--unmerged)       # Unmerged bed
+            if [ "$2" ]; then
+                UBD=$2
+                shift
+                if [ ! -f "$UBD" ]; then
+                   die  'ERROR: --unmerged File not found.'
+                fi
+            else
+                UBD="no"
+            fi
+            ;;
+        -t|--tumor)       # Tumor bam
+            if [ "$2" ]; then
+                TBP=$2
+                shift
+                if [ ! -f "$TBP" ]; then
+                   die  'ERROR: --tumor File not found.'
+                fi
+            else
+                die 'ERROR: "--tumor" requires a non-empty option argument.'
+            fi
+            ;;
+        -n|--normal)       # Normal bam
+            if [ "$2" ]; then
+                NBP=$2
+                shift
+            else
+                die 'ERROR: "--normal" requires a non-empty option argument.'
+            fi
+            ;;
+        -o|--output)       # Output filename
+            if [ "$2" ]; then
+                OUT=$2
+                shift
+            else
+                echo 'ERROR: "--output" requires a non-empty option argument. Tumor sample filename will be used.'
+            fi
+            ;;
+        -a|--skip_annotation)       # Write to skip annotation
+            if [ "$2" ] && [ "${2,,}" == "false" ]; then
+                ANNO="false"
+                shift
+            elif [ "$2" ] && [ "${2,,}" == "true" ]; then
+                ANNO="true"
+                shift
+            else
+                die 'ERROR: "--skip_annotation" requires either a "true" or "false" argument.'
+            fi
+            ;;
+        -s|--min_supporting_reads)       # Threshold for supporting reads
+            if [ "$2" ]; then
+                MSR=$2
+                shift
+            else
+                echo 'ERROR: "--min_supporting_reads" requires a non-empty option argument. The default value will be used.'
+            fi
+            ;;
+        -r|--min_normal_depth|--homopolymer_run)      # Threshold for number of reads in the normal sample or homopolymer lenght in tumor only analysis
+            if [ "$2" ]; then
+                MNR=$2
+                shift
+            else
+                echo 'ERROR: "--min_normal_depth and --homopolymer_run" require a non-empty option argument. The default value will be used.'
+            fi
+            ;;
+        -m|--min_tumor_depth)       # Threshold for number of reads in the tumor sample
+            if [ "$2" ]; then
+                MTR=$2
+                shift
+            else
+                echo 'ERROR: "--min_tumor_depth" requires a non-empty option argument. The default value will be used.'
+            fi
+            ;;
+        -f|--min_TN_VAF_ratio|--min_allele_fraction)       # Threshold for the TN/VAF ratio
+            if [ "$2" ]; then
+                MTVR=$2
+                shift
+            else
+                echo 'ERROR: "--min_TN_VAF_ratio" requires a non-empty option argument. The default value will be used.'
+            fi
+            ;;           
+        -j|--TVC_json)       # Path to the JSON file that includes the TVC parameters
+            if [ "$2" ]; then
+                JSON=$2
+                shift
+                if [ ! -f "$JSON" ]; then
+                   die  'ERROR: --TVC_json File not found.'
+                fi
+            else
+                echo 'ERROR: "--TVC_json" requires a non-empty option argument. The default JSON file will be used.'
+            fi
+            ;;
+        -p|--threads)       # Number of parallel TVC threads
+            if [ "$2" ]; then
+                NTH=$2
+                shift
+            else
+                echo 'ERROR: "--threads" requires a non-empty option argument. The default value will be used.'
+            fi
+            ;;
+        -k|--max_pop_af)       # Populations filter threshold
+            if [ "$2" ]; then
+                POP=$2
+                shift
+            else
+                echo 'ERROR: "--max_pop_af" requires a non-empty option argument. The default value will be used.'
+            fi
+            ;;
+        -i|--intermediate_files)       # Keep the intermediate files
+            if [ "$2" ] && [ "${2,,}" == "false" ]; then
+                LOG="false"
+                shift
+            elif [ "$2" ] && [ "${2,,}" == "true" ]; then
+                LOG="true"
+                shift
+            else
+                die 'ERROR: "--intermediate_files" requires either a "true" or "false" argument.'
+            fi
+            ;;    
+        -c|--humandb)       # Path to Annovar databases files
+            if [ "$2" ]; then
+                HDB=$2
+                shift
+            else
+                echo 'ERROR: "--humandb" requires a non-empty option argument. The default path will be used.'
+            fi
+            ;; 
+        -y|--non_coding)       # Keep non-coding mutations
+            if [ "$2" ] && [ "${2,,}" == "false" ]; then
+                NON="false"
+                shift
+            elif [ "$2" ] && [ "${2,,}" == "true" ]; then
+                NON="true"
+                shift
+            else
+                die 'ERROR: "--non_coding" requires either a "true" or "false" argument.'
+            fi
+            ;;       
+        -d|--pon)       # Unmerged bed
+            if [ "$2" ]; then
+                PON=$2
+                shift
+                if [ ! -f "$PON" ]; then
+                   die  'ERROR: --pon File not found.'
+                fi
+            else
+                PON="no"
+            fi
+            ;;
+        --)              
+            shift
+            break
+            ;;
+        -?*)
+            printf 'WARN: Unknown option (ignored): %s\n' "$1" >&2
+            ;;
+        *)               
+            break
+    esac
+
+    shift
+done
+
+
+NN=${TBP##*/}
+NN=${NN%.*}
+
+NNN=${NBP##*/}
+NNN=${NNN%.*}
+
+
+if [[ "$OUT" == "" ]]; then
+   OUT=$NN
+fi
+
+
+#######
+### Tumor-Normal Pipeline
+######
+
+if [[ "$NBP" != "" ]]; then
+
+
+#######
+### Defining standard parameters for TN analyses
+### if user did not specified different values
+######
+
+if [[ "$MSR" == "None" ]]; then
+   MSR=8
+fi
+
+if [[ "$MTR" == "None" ]]; then
+   MTR=10
+fi
+
+if [[ "$MNR" == "None" ]]; then
+   MNR=10
+fi
+
+if [[ "$MTVR" == "None" ]]; then
+   MTVR=10.0
+fi
+
+echo "Submitted parameters:"
+echo "Designed Merged Bed file: $BED"
+echo "Designed Unmerged Bed file: $UBD"
+echo "Tumor Bam file: $TBP"
+echo "Normal Bam file: $NBP"
+echo "Reference fasta file: $REF"
+echo "Reference fasta dictionary file: $DIC"
+echo "Run annotation: $ANNO"
+echo "Output filename: $OUT"
+echo "Min Supporting Reads: $MSR"
+echo "Min Normal Depth: $MNR"
+echo "Min Tumor Depth: $MTR"
+echo "Min TN/VAF Ratio: $MTVR"
+echo "TVC Json Path: $JSON"
+echo "Keep Intermediate Files: $LOG"
+echo "Number of TVC threads: $NTH"
+
+
+mkdir -p ./PipeIT/
+mkdir -p ./PipeIT/sample
+mkdir -p ./PipeIT/results
+mkdir -p ./PipeIT/results/$OUT
+mkdir -p ./PipeIT/sample/$OUT/output
+mkdir -p ./PipeIT/tmp/$OUT/
+
+
+#######
+### Unmerged bed file generation,
+### if user did not provide one
+######
+
+if [[ "$UBD" == "no" ]]; then echo "Unmerged BED not submitted."; /PipeIT_resources/usr/local/bin/tvcutils validate_bed --target-regions-bed $BED --reference $REF --unmerged-detail-bed PipeIT/sample/$OUT.designed.unmerged.bed --merged-plain-bed PipeIT/sample/$OUT.designed.merged.bed; UBD="PipeIT/sample/$OUT.designed.unmerged.bed"; fi
+
+
+#######
+### Variant call using VCF using parameters defined in the JSON file
+######
+
+variant_caller_pipeline.py -i $TBP -n $NBP -r $REF -o PipeIT/sample/$OUT -N $NTH -b $BED -p $JSON -m /PipeIT_resources/usr/local/res/ampliseqexome_germline_p1_hiq_motifset.txt -t /PipeIT_resources/usr/local/res/tvc-5.0.3-CentOS_7.3-x86_64-binary --primer-trim-bed $UBD -g $NN
+
+
+#######
+### Biallelic and multiallelic variants are splitted in different vcfs
+######
+
+bcftools view -m3 PipeIT/sample/$OUT/TSVC_variants.vcf.gz | grep -v "##contig" > PipeIT/sample/$OUT/TSVC_variants.multiallelic_ft.vcf && sleep 5
+
+bcftools view -M2 PipeIT/sample/$OUT/TSVC_variants.vcf.gz | grep -v "##contig" > PipeIT/sample/$OUT/TSVC_variants.biallelic_ft.vcf && sleep 5
+
+bgzip -c -f PipeIT/sample/$OUT/TSVC_variants.multiallelic_ft.vcf > PipeIT/sample/$OUT/TSVC_variants.multiallelic_ft.vcf.gz && sleep 5
+
+bgzip -c -f PipeIT/sample/$OUT/TSVC_variants.biallelic_ft.vcf > PipeIT/sample/$OUT/TSVC_variants.biallelic_ft.vcf.gz && sleep 5
+
+tabix -p vcf -f PipeIT/sample/$OUT/TSVC_variants.multiallelic_ft.vcf.gz && sleep 5
+
+tabix -p vcf -f PipeIT/sample/$OUT/TSVC_variants.biallelic_ft.vcf.gz && sleep 5
+
+
+#######
+### Normalization and left alignement
+### of multiallelic variants
+######
+
+bcftools norm -m -both PipeIT/sample/$OUT/TSVC_variants.multiallelic_ft.vcf.gz | grep -v "##contig" > PipeIT/sample/$OUT/TSVC_variants.multiallelic_ft.norm.vcf && sleep 5
+
+java -Djava.io.tmpdir=./PipeIT/tmp/$OUT/ -Xmx7G -jar /PipeIT_resources/usr/local/bin/GenomeAnalysisTK-3.6.jar  -S LENIENT -T LeftAlignAndTrimVariants -filterNoBases -R $REF -V PipeIT/sample/$OUT/TSVC_variants.multiallelic_ft.norm.vcf -o PipeIT/sample/$OUT/TSVC_variants.multiallelic_ft.norm.left_align.vcf && sleep 5
+
+bgzip -c -f PipeIT/sample/$OUT/TSVC_variants.multiallelic_ft.norm.left_align.vcf > PipeIT/sample/$OUT/TSVC_variants.multiallelic_ft.norm.left_align.vcf.gz && sleep 5
+
+tabix -p vcf -f PipeIT/sample/$OUT/TSVC_variants.multiallelic_ft.norm.left_align.vcf.gz && sleep 5
+
+
+#######
+### Biallelic and multiallelic variants are merged together
+### and prepared to be filtered
+######
+
+bcftools isec -O v -p PipeIT/sample/$OUT/isec/ PipeIT/sample/$OUT/TSVC_variants.multiallelic_ft.norm.left_align.vcf.gz PipeIT/sample/$OUT/TSVC_variants.biallelic_ft.vcf.gz && sleep 5
+
+umask 002; mkdir -p -m 775 PipeIT/sample/$OUT/tvc_somatic/tvc/vcf/$OUT/isec PipeIT/sample/$OUT/isec; set -o pipefail; grep -v "##contig" PipeIT/sample/$OUT/isec/0000.vcf | perl /PipeIT_resources/usr/local/bin/vcfsorter.pl $DIC - > PipeIT/sample/$OUT/isec/0000.post_bcftools.vcf && sleep 5
+
+umask 002; mkdir -p -m 775 PipeIT/sample/$OUT/tvc_somatic/tvc/vcf/$OUT/isec PipeIT/sample/$OUT/isec; set -o pipefail; grep -v "##contig" PipeIT/sample/$OUT/isec/0001.vcf | perl /PipeIT_resources/usr/local/bin/vcfsorter.pl $DIC - > PipeIT/sample/$OUT/isec/0001.post_bcftools.vcf && sleep 5
+
+umask 002; mkdir -p -m 775 PipeIT/sample/$OUT/tvc_somatic/tvc/vcf/$OUT/isec PipeIT/sample/$OUT/isec; set -o pipefail; grep -v "##contig" PipeIT/sample/$OUT/isec/0003.vcf | perl /PipeIT_resources/usr/local/bin/vcfsorter.pl $DIC - > PipeIT/sample/$OUT/isec/0003.post_bcftools.vcf && sleep 5
+
+java -Djava.io.tmpdir=./PipeIT/tmp/$OUT/ -Xmx16G -jar /PipeIT_resources/usr/local/bin/GenomeAnalysisTK-3.6.jar  -S LENIENT -T CombineVariants -filterNoBases -R $REF -V PipeIT/sample/$OUT/isec/0000.post_bcftools.vcf -V PipeIT/sample/$OUT/isec/0001.post_bcftools.vcf -V PipeIT/sample/$OUT/isec/0003.post_bcftools.vcf -o PipeIT/sample/$OUT/TSVC_variants_final.vcf --assumeIdenticalSamples && sleep 5
+
+vcftools --vcf PipeIT/sample/$OUT/TSVC_variants_final.vcf --recode --recode-INFO-all --out PipeIT/sample/$OUT/TSVC_variants.snps.vcf && mv PipeIT/sample/$OUT/TSVC_variants.snps.vcf.recode.vcf PipeIT/sample/$OUT/TSVC_variants.snps.vcf && sleep 5
+
+umask 002; mkdir -p -m 775 PipeIT/sample/log/$OUT/ttvc_somatic/vcf PipeIT/vcf/$OUT; set -o pipefail; perl /PipeIT_resources/usr/local/bin/vcfsorter.pl $DIC PipeIT/sample/$OUT/TSVC_variants.snps.vcf > PipeIT/vcf/$OUT/$OUT.tvc_snps.vcf && sleep 5
+
+java -Djava.io.tmpdir=./PipeIT/tmp/$OUT/ -Xmx15G -jar /PipeIT_resources/usr/local/bin/GenomeAnalysisTK-3.6.jar  -S LENIENT -T VariantFiltration -filterNoBases -R $REF -V PipeIT/vcf/$OUT/$OUT.tvc_snps.vcf -o PipeIT/vcf/$OUT/$OUT.tvc_snps.target_ft.vcf --mask $BED --maskName targetInterval --filterNotInMask && rm -f PipeIT/vcf/$OUT/$OUT.tvc_snps.vcf PipeIT/vcf/$OUT/$OUT.tvc_snps.vcf.idx && sleep 5
+
+
+#######
+### Variants are flagged to be filtered based on sequencing statistics
+### such as number of reads and allele fraction
+######
+
+java -Djava.io.tmpdir=./PipeIT/tmp/$OUT/ -Xmx15G -jar /PipeIT_resources/usr/local/bin/GenomeAnalysisTK-3.6.jar  -S LENIENT -T VariantFiltration -filterNoBases -R $REF -V PipeIT/vcf/$OUT/$OUT.tvc_snps.target_ft.vcf -o PipeIT/vcf/$OUT/$OUT.tvc_snps.target_ft.som_ad_ft.vcf \
+--filterExpression 'if (has(vc.getGenotype("'$NN'").getAnyAttribute("FAO")) == false) {vc.getGenotype("'$NN'").getAnyAttribute("AO") < '$MSR'} else {vc.getGenotype("'$NN'").getAnyAttribute("FAO") < '$MSR'}' --filterName tumorVarAD  \
+--filterExpression 'if (has(vc.getGenotype("'$NN'").getAnyAttribute("FAO")) == false || has(vc.getGenotype("'$NN'").getAnyAttribute("FRO")) == false)  {(vc.getGenotype("'$NN'").getAnyAttribute("AO") * 1.0) + (vc.getGenotype("'$NN'").getAnyAttribute("RO") * 1.0) <= '$MTR'} else {(vc.getGenotype("'$NN'").getAnyAttribute("FAO")) * 1.0 + (vc.getGenotype("'$NN'").getAnyAttribute("FRO") * 1.0) <= '$MTR'}' --filterName tumorDepthFilter \
+--filterExpression 'vc.getGenotype("'$NNN'").getAnyAttribute("AO") + vc.getGenotype("'$NNN'").getAnyAttribute("RO") <= '$MNR'' --filterName normalDepthFilter_raw \
+--filterExpression ' (vc.getGenotype("'$NNN'").getAnyAttribute("AO") * 1.0) / (vc.getGenotype("'$NNN'").getAnyAttribute("AO") * 1.0 + vc.getGenotype("'$NNN'").getAnyAttribute("RO") * 1.0) >  vc.getGenotype("'$NN'").getAnyAttribute("AF") * 1.0  / '$MTVR'' --filterName somAD  \
+&& sed -i 's/getGenotype("\([^"]*\)")/getGenotype(\1)/g' PipeIT/vcf/$OUT/$OUT.tvc_snps.target_ft.som_ad_ft.vcf && rm -f PipeIT/vcf/$OUT/$OUT.tvc_snps.target_ft.vcf PipeIT/vcf/$OUT/$OUT.tvc_snps.target_ft.vcf.idx && sleep 5
+
+
+#######
+### Variants are whitelisted based on literature
+######
+
+cp /PipeIT_resources/usr/local/res/hg19_ionref/publication_hotspots_inclnoncoding_incl3d.vcf ./PipeIT/sample/$OUT/.
+
+java -Djava.io.tmpdir=./PipeIT/tmp/$OUT/ -Xmx15G -jar /PipeIT_resources/usr/local/bin/GenomeAnalysisTK-3.6.jar  -S LENIENT -T VariantFiltration -filterNoBases -R $REF -V PipeIT/vcf/$OUT/$OUT.tvc_snps.target_ft.som_ad_ft.vcf -o PipeIT/vcf/$OUT/$OUT.tvc_snps.target_ft.som_ad_ft.hotspot.vcf --maskName HOTSPOT --mask PipeIT/sample/$OUT/publication_hotspots_inclnoncoding_incl3d.vcf && rm -f PipeIT/vcf/$OUT/$OUT.tvc_snps.target_ft.som_ad_ft.vcf PipeIT/vcf/$OUT/$OUT.tvc_snps.target_ft.som_ad_ft.vcf.idx && sleep 5
+
+extract_pass_vcf.pl PipeIT/vcf/$OUT/$OUT.tvc_snps.target_ft.som_ad_ft.hotspot.vcf PipeIT/vcf/$OUT/$OUT.tvc_snps.target_ft.som_ad_ft.hotspot.pass.vcf PipeIT/vcf/$OUT/$OUT.tvc_snps.target_ft.som_ad_ft.hotspot.fail.vcf && sleep 5
+
+
+#######
+### Variants previously flagged to be filtered are removed
+### unless they also were whitelisted
+######
+
+java -Djava.io.tmpdir=./PipeIT/tmp/$OUT/ -Xmx7G -jar /PipeIT_resources/usr/local/bin/SnpSift.jar filter -c /PipeIT_resources/usr/local/res/snpEff.config -f PipeIT/vcf/$OUT/$OUT.tvc_snps.target_ft.som_ad_ft.hotspot.pass.vcf "( na FILTER ) | (FILTER = 'PASS') | (FILTER has 'HOTSPOT')" > PipeIT/vcf/$OUT/$OUT.tvc_snps.target_ft.som_ad_ft.hotspot.pass2.vcf
+
+[ -s file.name ] || cp PipeIT/vcf/$OUT/$OUT.tvc_snps.target_ft.som_ad_ft.hotspot.pass.vcf PipeIT/vcf/$OUT/$OUT.tvc_snps.target_ft.som_ad_ft.hotspot.pass2.vcf
+
+mkdir -p ./PipeIT/results/$OUT
+
+
+#######
+### Variants annotation is performed unless specified otherwise by the user
+######
+
+if [[ "$ANNO" == "true" ]] 
+then 
+    java -Djava.io.tmpdir=./PipeIT/tmp/$OUT/ -Xmx7G -jar /PipeIT_resources/usr/local/bin/snpEff.jar ann -i vcf -o vcf -c /PipeIT_resources/usr/local/res/snpEff.config -canon -no NEXT_PROT -no-intergenic GRCh37.75 PipeIT/vcf/$OUT/$OUT.tvc_snps.target_ft.som_ad_ft.hotspot.pass2.vcf > PipeIT/results/$OUT/$OUT.PipeIT.vcf
+mv snpEff_genes.txt PipeIT/results/$OUT/.
+mv snpEff_summary.html PipeIT/results/$OUT/.
+else
+    cp PipeIT/vcf/$OUT/$OUT.tvc_snps.target_ft.som_ad_ft.hotspot.pass2.vcf PipeIT/results/$OUT/$OUT.PipeIT.vcf
+    echo "Annotation disabled"
+fi
+
+
+#######
+### Intermediate files are removed unless specified otherwise by the user
+######
+
+if [[ "$LOG" == "false" ]]
+then 
+  rm -r ./PipeIT/sample/$OUT*
+else
+echo "Please find intermediate files in PipeIT/sample/ and PipeIT/vcf/"
+fi
+
+
+
+fi
+
+
+#######
+### Tumor-only Pipeline
+######
+
+if [[ "$NBP" == "" ]]; then
+
+
+NTN=${NBP##*/}
+NTN=${NBP%.*}
+
+if [[ "$HDB" == "None" ]]; then
+echo "No matched normal or Annovar files provided, PipeIT cannot be executed."
+
+else
+
+if [[ "$OUT" == "" ]]; then
+   OUT=$NTN
+fi
+
+
+if [[ "$MSR" == "None" ]]; then
+   MSR=6
+fi
+
+if [[ "$MTR" == "None" ]]; then
+   MTR=20
+fi
+
+if [[ "$MTVR" == "None" ]]; then
+   MTVR=0.1
+fi
+
+if [[ "$POP" == "None" ]]; then
+   POP=0.005
+fi
+
+if [[ "$MNR" == "None" ]]; then
+   MNR=4
+fi
+
+echo "Submitted parameters:"
+echo "Tumor_Only Bam file: $TBP"
+echo "Pool of Normal vcf: $PON"
+echo "Annovar databases: $HDB"
+echo "TVC Json Path: $JSON"
+echo "Keep Intermediate Files: $LOG"
+echo "Number of TVC threads: $NTH"
+echo "Min Supporting Reads: $MSR"
+echo "Min Tumor Depth: $MTR"
+echo "Min Allele Fraction: $MTVR"
+echo "Designed Merged Bed file: $BED"
+echo "Designed Unmerged Bed file: $UBD"
+echo "Reference fasta file: $REF"
+echo "Output filename: $OUT"
+echo "Homopolymer run filter: $MNR"
+echo "Max frequence in population: $POP"
+
+mkdir -p ./PipeIT/
+mkdir -p ./PipeIT/sample
+mkdir -p ./PipeIT/results
+mkdir -p ./PipeIT/results/$OUT
+mkdir -p ./PipeIT/sample/$OUT/output
+mkdir -p ./PipeIT/tmp/$OUT/
+
+
+#######
+### Unmerged bed file generation,
+### if user did not provide one
+######
+
+if [[ "$UBD" == "no" ]]; then echo "Unmerged BED not submitted."; /PipeIT_resources/usr/local/bin/tvcutils validate_bed --target-regions-bed $BED --reference $REF --unmerged-detail-bed PipeIT/sample/$OUT/$OUT.designed.unmerged.bed --merged-plain-bed PipeIT/sample/$OUT/$OUT.designed.merged.bed; UBD="PipeIT/sample/$OUT/$OUT.designed.unmerged.bed"; fi
+
+
+#######
+### Variant call using VCF using parameters defined in the JSON file
+######
+
+variant_caller_pipeline.py -i $TBP -r $REF -o PipeIT/sample/$OUT -N $NTH -b $BED -p $JSON -m /PipeIT_resources/usr/local/res/ampliseqexome_germline_p1_hiq_motifset.txt -t /PipeIT_resources/usr/local/res/tvc-5.0.3-CentOS_7.3-x86_64-binary --primer-trim-bed $UBD -g $TBP
+
+
+#######
+### Biallelic and multiallelic variants are splitted in different vcfs
+######
+
+bcftools view -m3 PipeIT/sample/$OUT/TSVC_variants.vcf.gz | grep -v "##contig" > PipeIT/sample/$OUT/TSVC_variants.multiallelic_ft.vcf && sleep 5
+
+bcftools view -M2 PipeIT/sample/$OUT/TSVC_variants.vcf.gz | grep -v "##contig" > PipeIT/sample/$OUT/TSVC_variants.biallelic_ft.vcf && sleep 5
+
+bgzip -c -f PipeIT/sample/$OUT/TSVC_variants.multiallelic_ft.vcf > PipeIT/sample/$OUT/TSVC_variants.multiallelic_ft.vcf.gz && sleep 5
+
+bgzip -c -f PipeIT/sample/$OUT/TSVC_variants.biallelic_ft.vcf > PipeIT/sample/$OUT/TSVC_variants.biallelic_ft.vcf.gz && sleep 5
+
+tabix -p vcf -f PipeIT/sample/$OUT/TSVC_variants.multiallelic_ft.vcf.gz && sleep 5
+
+tabix -p vcf -f PipeIT/sample/$OUT/TSVC_variants.biallelic_ft.vcf.gz && sleep 5
+
+
+#######
+### Normalization and left alignement
+### of multiallelic variants
+######
+
+bcftools norm -m -both PipeIT/sample/$OUT/TSVC_variants.multiallelic_ft.vcf.gz | grep -v "##contig" > PipeIT/sample/$OUT/TSVC_variants.multiallelic_ft.norm.vcf && sleep 5
+
+java -Djava.io.tmpdir=./PipeIT/tmp/$OUT/ -Xmx7G -jar /PipeIT_resources/usr/local/bin/GenomeAnalysisTK-3.6.jar  -S LENIENT -T LeftAlignAndTrimVariants -filterNoBases -R $REF -V PipeIT/sample/$OUT/TSVC_variants.multiallelic_ft.norm.vcf -o PipeIT/sample/$OUT/TSVC_variants.multiallelic_ft.norm.left_align.vcf && sleep 5
+
+
+#######
+### Biallelic and multiallelic variants are merged together
+### and prepared to be filtered
+######
+
+bgzip -c -f PipeIT/sample/$OUT/TSVC_variants.multiallelic_ft.norm.left_align.vcf > PipeIT/sample/$OUT/TSVC_variants.multiallelic_ft.norm.left_align.vcf.gz && sleep 5
+
+tabix -p vcf -f PipeIT/sample/$OUT/TSVC_variants.multiallelic_ft.norm.left_align.vcf.gz && sleep 5
+
+bcftools isec -O v -p PipeIT/sample/$OUT/isec/ PipeIT/sample/$OUT/TSVC_variants.multiallelic_ft.norm.left_align.vcf.gz PipeIT/sample/$OUT/TSVC_variants.biallelic_ft.vcf.gz && sleep 5
+
+umask 002; mkdir -p -m 775 PipeIT/sample/$OUT/tvc_somatic/tvc/vcf/$OUT/isec PipeIT/sample/$OUT/isec; set -o pipefail; grep -v "##contig" PipeIT/sample/$OUT/isec/0000.vcf | perl /PipeIT_resources/usr/local/bin/vcfsorter.pl $DIC - > PipeIT/sample/$OUT/isec/0000.post_bcftools.vcf && sleep 5
+
+umask 002; mkdir -p -m 775 PipeIT/sample/$OUT/tvc_somatic/tvc/vcf/$OUT/isec PipeIT/sample/$OUT/isec; set -o pipefail; grep -v "##contig" PipeIT/sample/$OUT/isec/0001.vcf | perl /PipeIT_resources/usr/local/bin/vcfsorter.pl $DIC - > PipeIT/sample/$OUT/isec/0001.post_bcftools.vcf && sleep 5
+
+umask 002; mkdir -p -m 775 PipeIT/sample/$OUT/tvc_somatic/tvc/vcf/$OUT/isec PipeIT/sample/$OUT/isec; set -o pipefail; grep -v "##contig" PipeIT/sample/$OUT/isec/0003.vcf | perl /PipeIT_resources/usr/local/bin/vcfsorter.pl $DIC - > PipeIT/sample/$OUT/isec/0003.post_bcftools.vcf && sleep 5
+
+java -Djava.io.tmpdir=./PipeIT/tmp/$OUT/ -Xmx16G -jar /PipeIT_resources/usr/local/bin/GenomeAnalysisTK-3.6.jar  -S LENIENT -T CombineVariants -filterNoBases -R $REF -V PipeIT/sample/$OUT/isec/0000.post_bcftools.vcf -V PipeIT/sample/$OUT/isec/0001.post_bcftools.vcf -V PipeIT/sample/$OUT/isec/0003.post_bcftools.vcf -o PipeIT/sample/$OUT/TSVC_variants_final.vcf --assumeIdenticalSamples && sleep 5
+
+mkdir -p ./PipeIT/sample/$OUT/ann/
+
+
+#######
+### Population annotation is performed by Annovar,
+### homopolymer regions annotation is performed by GATK
+######
+
+table_annovar.pl PipeIT/sample/$OUT/TSVC_variants_final.vcf $HDB -out PipeIT/sample/$OUT/ann/$OUT -buildver hg19 -remove -protocol esp6500siv2_all,1000g2015aug_all,exac03,gnomad_genome -operation f,f,f,f -nastring . -vcfinput
+
+java -Djava.io.tmpdir=./PipeIT/tmp/$OUT/ -Xmx16G -jar /PipeIT_resources/usr/local/bin/GenomeAnalysisTK-3.6.jar -T VariantAnnotator -nt 2 -R $REF -L PipeIT/sample/$OUT/ann/$OUT.hg19_multianno.vcf -A HomopolymerRun -I $TBP -V PipeIT/sample/$OUT/ann/$OUT.hg19_multianno.vcf -o PipeIT/sample/$OUT/ann/$OUT.hg19_homopolymer.vcf
+
+perl -pi -e 's/1000g2015aug_all/ANN_1000g2015aug/g' PipeIT/sample/$OUT/ann/$OUT.hg19_homopolymer.vcf
+
+
+#######
+### Variants are flagged to be filtered based on sequencing statistics
+### such as number of reads and allele fraction
+### and on population mutations frequencies
+######
+
+
+java -Djava.io.tmpdir=./PipeIT/tmp/ -Xmx16G -jar /PipeIT_resources/usr/local/bin/GenomeAnalysisTK-3.6.jar \
+-T VariantFiltration -R $REF -o PipeIT/sample/$OUT/ann/$OUT.hg19_pass.vcf \
+-V PipeIT/sample/$OUT/ann/$OUT.hg19_homopolymer.vcf \
+--filterExpression 'if (has("FDP") == false) {DP < '$MTR'} else {FDP < '$MTR'}' --filterName FDP \
+--filterExpression 'if (has("FAO") == false) {AO < '$MSR'} else {FAO < '$MSR'}' --filterName FAO \
+--filterExpression '(AF*1.0) < '$MTVR'' --filterName AF \
+--filterExpression 'if ((has("FSAF") == false) || (has("FSAR") == false)) {((SAF*1.0)/(SAR*1.0) <0.2) || ((SAF*1.0)/(SAR*1.0) >5)} {((FSAF*1.0)/(FSAR*1.0) <0.2) || ((FSAF*1.0)/(FSAR*1.0) >5)} ' --filterName SAF/SAR_ratio \
+--filterExpression 'if ((has("FSAR") == false) || (has("FSAF") == false)) {SAR < 3 || SAF < 3} else {FSAR < 3 || FSAF < 3} ' --filterName SARandSAF \
+--filterExpression 'if '$MNR' != "0"  {HRun > '$MNR' || HRUN > '$MNR'}' --filterName hrun \
+--filterExpression ' ExAC_ALL > '$POP'' --filterName EXAC \
+--filterExpression 'esp6500siv2_all > '$POP'' --filterName esp6500 \
+--filterExpression ' ANN_1000g2015aug > '$POP'' --filterName 1000g \
+--filterExpression ' gnomAD_genome_ALL > '$POP'' --filterName gnomAD \
+--filterExpression '(( 0.4 < (AF*1.0) && (AF*1.0) < 0.6 ) || ((AF*1.0) > 0.9)) && ( ANN_1000g2015aug != "." || esp6500siv2_all != "." || ExAC_ALL != "." || gnomAD_genome_ALL != ".") ' --filterName annotation
+
+
+
+#######
+### Variants are annotated
+######
+
+java -Djava.io.tmpdir=/scratch -Xmx7G -jar /PipeIT_resources/usr/local/bin/snpEff.jar ann -i vcf -o vcf -c /PipeIT_resources/usr/local/res/snpEff.config -canon -no NEXT_PROT -no-intergenic GRCh37.75 PipeIT/sample/$OUT/ann/$OUT.hg19_pass.vcf > PipeIT/sample/$OUT/ann/$OUT.hg19_pass_highmoderate.vcf && sleep 5
+
+mv snpEff_genes.txt PipeIT/results/$OUT/.
+mv snpEff_summary.html PipeIT/results/$OUT/.
+
+
+#######
+### Variants are whitelisted based on literature
+######
+
+cp /PipeIT_resources/usr/local/res/hg19_ionref/publication_hotspots_inclnoncoding_incl3d.vcf ./PipeIT/sample/$OUT/.
+
+java -Djava.io.tmpdir=./PipeIT/tmp/$OUT/ -Xmx15G -jar /PipeIT_resources/usr/local/bin/GenomeAnalysisTK-3.6.jar  -S LENIENT -T VariantFiltration -filterNoBases -R $REF -V PipeIT/sample/$OUT/ann/$OUT.hg19_pass_highmoderate.vcf -o PipeIT/sample/$OUT/ann/$OUT.hg19_pass_highmoderate_hotspot.vcf --maskName HOTSPOT --mask PipeIT/sample/$OUT/publication_hotspots_inclnoncoding_incl3d.vcf
+
+
+#######
+### Variants either previously flagged to be filtered 
+### or non-coding are removed
+### unless they also were whitelisted
+######
+
+if [[ "$NON" == "false" ]]; then
+	java -Djava.io.tmpdir=./PipeIT/tmp/$OUT/ -Xmx7G -jar /PipeIT_resources/usr/local/bin/SnpSift.jar filter "((( na FILTER ) || (FILTER = 'PASS') || (FILTER has 'HOTSPOT') ) && ((ANN[*].IMPACT has 'HIGH') || (ANN[*].IMPACT has 'MODERATE') ))" PipeIT/sample/$OUT/ann/$OUT.hg19_pass_highmoderate_hotspot.vcf > PipeIT/sample/$OUT/ann/$OUT.hg19_final.vcf
+else
+        java -Djava.io.tmpdir=./PipeIT/tmp/$OUT/ -Xmx7G -jar /PipeIT_resources/usr/local/bin/SnpSift.jar filter "(( na FILTER ) || (FILTER = 'PASS') || (FILTER has 'HOTSPOT') )" PipeIT/sample/$OUT/ann/$OUT.hg19_pass_highmoderate_hotspot.vcf > PipeIT/sample/$OUT/ann/$OUT.hg19_final.vcf
+fi
+
+mkdir -p ./PipeIT/results/
+mkdir -p ./PipeIT/results/$OUT
+mkdir -p ./PipeIT/sample/$OUT/output
+
+bgzip -c -f PipeIT/sample/$OUT/ann/$OUT.hg19_final.vcf > PipeIT/sample/$OUT/output/$OUT.hg19_final.vcf.gz
+tabix -p vcf -f PipeIT/sample/$OUT/output/$OUT.hg19_final.vcf.gz
+
+
+#######
+### If a panel of normals was provided by the user
+### it is prepared to be used as an additional filter
+######
+
+if [[ "$PON" != "None" ]]; then
+
+echo "Processing the Pool of Normals:"
+
+mkdir -p ./PipeIT/pon/
+mkdir -p ./PipeIT/pon/$OUT
+
+
+#######
+### Biallelic and multiallelic variants in the panel of normals
+### are splitted in different vcfs
+######
+
+bcftools view -m3 $PON | grep -v '##contig' > ./PipeIT/pon/$OUT/pon.tvc.multiallelic_ft.vcf & sleep 5
+bcftools view -M2 $PON | grep -v '##contig' > ./PipeIT/pon/$OUT/pon.tvc.biallelic_ft.vcf & sleep 5 
+
+
+#######
+### Biallelic variants that are whitelisted
+### are removed from the panel of normal's vcf
+######
+
+java -Djava.io.tmpdir=./PipeIT/tmp/$OUT/ -Xmx15G -jar /PipeIT_resources/usr/local/bin/GenomeAnalysisTK-3.6.jar  -S LENIENT -T VariantFiltration -filterNoBases -R $REF -V ./PipeIT/pon/$OUT/pon.tvc.biallelic_ft.vcf -o ./PipeIT/pon/$OUT/pon.tvc.biallelic_ft.hotspot.vcf --maskName HOTSPOT --mask PipeIT/sample/$OUT/publication_hotspots_inclnoncoding_incl3d.vcf
+
+java -Djava.io.tmpdir=./PipeIT/tmp/$OUT/ -Xmx7G -jar /PipeIT_resources/usr/local/bin/SnpSift.jar filter "(( na FILTER ) || (FILTER = 'PASS')  )" ./PipeIT/pon/$OUT/pon.tvc.biallelic_ft.hotspot.vcf > ./PipeIT/pon/$OUT/pon.tvc.biallelic_ft.nohotspot.vcf
+
+
+bgzip -c -f ./PipeIT/pon/$OUT/pon.tvc.multiallelic_ft.vcf > ./PipeIT/pon/$OUT/pon.tvc.multiallelic_ft.vcf.gz & sleep 5
+bgzip -c -f ./PipeIT/pon/$OUT/pon.tvc.biallelic_ft.nohotspot.vcf > ./PipeIT/pon/$OUT/pon.tvc.biallelic_ft.vcf.gz & sleep 5
+tabix -p vcf -f ./PipeIT/pon/$OUT/pon.tvc.multiallelic_ft.vcf.gz & sleep 5
+tabix -p vcf -f ./PipeIT/pon/$OUT/pon.tvc.biallelic_ft.vcf.gz & sleep 5 
+
+grep -v '##contig' ./PipeIT/pon/$OUT/pon.tvc.multiallelic_ft.vcf > ./PipeIT/pon/$OUT/pon.tvc.nohead.vcf
+
+bgzip -c -f ./PipeIT/pon/$OUT/pon.tvc.nohead.vcf > ./PipeIT/pon/$OUT/pon.tvc.nohead.vcf.gz & sleep 5
+tabix -p vcf -f ./PipeIT/pon/$OUT/pon.tvc.nohead.vcf.gz & sleep 5
+
+
+#######
+### Normalization and left alignement
+### of multiallelic variants
+######
+
+bcftools annotate -x FMT,INFO ./PipeIT/pon/$OUT/pon.tvc.nohead.vcf.gz -o ./PipeIT/pon/$OUT/pon.tvc.nohead.anno.vcf
+
+bcftools norm -m -both ./PipeIT/pon/$OUT/pon.tvc.nohead.anno.vcf | grep -v '##contig'  > ./PipeIT/pon/$OUT/pon.tvc.multiallelic_ft.norm.vcf 
+
+java -Djava.io.tmpdir=./PipeIT/tmp/$OUT/ -Xmx7G -jar /PipeIT_resources/usr/local/bin/GenomeAnalysisTK-3.6.jar -S LENIENT -T LeftAlignAndTrimVariants -filterNoBases -R $REF -V ./PipeIT/pon/$OUT/pon.tvc.multiallelic_ft.norm.vcf -o ./PipeIT/pon/$OUT/pon.tvc.multiallelic_ft.left_align.norm.vcf && sleep 5 
+
+
+#######
+### Multiallelic variants that are whitelisted
+### are removed from the panel of normal's vcf
+######
+
+java -Djava.io.tmpdir=./PipeIT/tmp/$OUT/ -Xmx15G -jar /PipeIT_resources/usr/local/bin/GenomeAnalysisTK-3.6.jar  -S LENIENT -T VariantFiltration -filterNoBases -R $REF -V ./PipeIT/pon/$OUT/pon.tvc.multiallelic_ft.left_align.norm.vcf -o ./PipeIT/pon/$OUT/pon.tvc.multiallelic_ft.left_align.norm.hotspot.vcf --maskName HOTSPOT --mask PipeIT/sample/$OUT/publication_hotspots_inclnoncoding_incl3d.vcf
+
+java -Djava.io.tmpdir=./PipeIT/tmp/$OUT/ -Xmx7G -jar /PipeIT_resources/usr/local/bin/SnpSift.jar filter "(( na FILTER ) || (FILTER = 'PASS')  )" ./PipeIT/pon/$OUT/pon.tvc.multiallelic_ft.left_align.norm.hotspot.vcf > ./PipeIT/pon/$OUT/pon.tvc.multiallelic_ft.left_align.norm.nohotspot.vcf
+
+
+#######
+### Biallelic and multiallelic variants from the panel of normals are merged together
+######
+
+bgzip -c -f ./PipeIT/pon/$OUT/pon.tvc.multiallelic_ft.left_align.norm.nohotspot.vcf > ./PipeIT/pon/$OUT/pon.tvc.multiallelic_ft.left_align.norm.nohotspot.vcf.gz && sleep 5 
+tabix -p vcf -f ./PipeIT/pon/$OUT/pon.tvc.multiallelic_ft.left_align.norm.nohotspot.vcf.gz && sleep 5 
+
+bcftools isec -O v -p ./PipeIT/pon/$OUT/isec/ ./PipeIT/pon/$OUT/pon.tvc.multiallelic_ft.left_align.norm.nohotspot.vcf.gz ./PipeIT/pon/$OUT/pon.tvc.biallelic_ft.vcf.gz && sleep 5 
+
+umask 002; mkdir -p -m 775 ./PipeIT/pon/$OUT/isec ./PipeIT/pon/$OUT/isec; set -o pipefail; grep -v '##contig' ./PipeIT/pon/$OUT/isec/0000.vcf | perl /PipeIT_resources/usr/local/bin/vcfsorter.pl /PipeIT_resources/usr/local/res/hg19.dict - > ./PipeIT/pon/$OUT/isec/0000.post_bcftools.vcf && sleep 5
+
+umask 002; mkdir -p -m 775 ./PipeIT/pon/$OUT/isec ./PipeIT/pon/$OUT/isec; set -o pipefail; grep -v '##contig' ./PipeIT/pon/$OUT/isec/0001.vcf | perl /PipeIT_resources/usr/local/bin/vcfsorter.pl /PipeIT_resources/usr/local/res/hg19.dict - > ./PipeIT/pon/$OUT/isec/0001.post_bcftools.vcf && sleep 5
+
+umask 002; mkdir -p -m 775 ./PipeIT/pon/$OUT/isec ./PipeIT/pon/$OUT/isec; set -o pipefail; grep -v '##contig' ./PipeIT/pon/$OUT/isec/0003.vcf | perl /PipeIT_resources/usr/local/bin/vcfsorter.pl /PipeIT_resources/usr/local/res/hg19.dict - > ./PipeIT/pon/$OUT/isec/0003.post_bcftools.vcf && sleep 5
+
+
+#######
+### The variants that overlap across the panel of normal
+### and the previously called variants are removed
+######
+
+java -Djava.io.tmpdir=./PipeIT/tmp/$OUT/ -Xmx16G -jar /PipeIT_resources/usr/local/bin/GenomeAnalysisTK-3.6.jar  -S LENIENT -T CombineVariants -filterNoBases -R /PipeIT_resources/usr/local/res/hg19.fasta -V ./PipeIT/pon/$OUT/isec/0000.post_bcftools.vcf -V ./PipeIT/pon/$OUT/isec/0001.post_bcftools.vcf -V ./PipeIT/pon/$OUT/isec/0003.post_bcftools.vcf -o ./PipeIT/pon/$OUT/pon.tvc.norm_final.vcf --assumeIdenticalSamples && sleep 5 
+bgzip -c -f ./PipeIT/pon/$OUT/pon.tvc.norm_final.vcf > ./PipeIT/pon/$OUT/pon.tvc.norm_final.vcf.gz 
+tabix -p vcf -f ./PipeIT/pon/$OUT/pon.tvc.norm_final.vcf.gz
+bcftools isec -p PipeIT/sample/$OUT/output -C PipeIT/sample/$OUT/output/$OUT.hg19_final.vcf.gz ./PipeIT/pon/$OUT/pon.tvc.norm_final.vcf.gz
+
+
+mv PipeIT/sample/$OUT/output/0000.vcf PipeIT/results/$OUT/$OUT.PipeIT.vcf
+
+else
+cp PipeIT/sample/$OUT/ann/$OUT.hg19_final.vcf PipeIT/results/$OUT/$OUT.PipeIT.vcf
+
+fi
+
+
+#######
+### Intermediate files are removed unless specified otherwise by the user
+######
+
+if [[ "$LOG" == "false" ]]
+then 
+  rm -r ./PipeIT/sample/$OUT*
+if [[ "$PON" != "None" ]]; then
+  rm -r ./PipeIT/pon/$OUT
+fi
+else
+echo "Please find intermediate files in PipeIT/sample/ and PipeIT/vcf/"
+fi
+fi
+fi
